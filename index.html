@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Elite Dama - Pro Edition</title>
+    <style>
+        :root { --accent: #00f2ff; }
+        body { background: #121212; color: #eee; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 20px; }
+        
+        .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; }
+        select, button { padding: 10px 15px; border-radius: 5px; border: none; background: #333; color: white; cursor: pointer; font-size: 1rem; transition: 0.3s; }
+        button:hover { background: #444; color: var(--accent); }
+        #status { margin: 10px; font-size: 1.5rem; color: #ffcc00; font-weight: bold; min-height: 35px; }
+
+        #board { 
+            display: grid; grid-template-columns: repeat(8, 65px); grid-template-rows: repeat(8, 65px); 
+            border: 10px solid #222; position: relative; box-shadow: 0 0 40px rgba(0,0,0,0.8);
+        }
+        .sq { width: 65px; height: 65px; display: flex; justify-content: center; align-items: center; }
+        .black { background: #000; }
+        .white { background: #3a3a3a; }
+        
+        .piece { 
+            width: 50px; height: 50px; border-radius: 50%; border: 4px solid; 
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); position: relative; box-sizing: border-box;
+        }
+        .red { border-color: #ff4444; background: #990000; }
+        .yellow { border-color: #ffff00; background: #999900; }
+        .king::after { content: '★'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 24px; }
+        .selected { outline: 3px solid var(--accent); transform: scale(1.15); z-index: 10; box-shadow: 0 0 20px var(--accent); }
+
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100; border-radius: 5px;
+        }
+        #overlay h1 { color: var(--accent); margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <select id="gameMode">
+            <option value="ai">Vs. Gemini AI (Expert)</option>
+            <option value="pvp">Two Players (Local)</option>
+        </select>
+        <button onclick="init()">Reset Game</button>
+    </div>
+
+    <div id="status">Your Turn (Yellow)</div>
+
+    <div id="board">
+        <div id="overlay">
+            <h1 id="winText">Yellow Wins!</h1>
+            <button onclick="init()">Play Again</button>
+        </div>
+    </div>
+
+<script>
+    const RED = -1, YELLOW = 1, R_KING = -2, Y_KING = 2, EMPTY = 0;
+    let board = [];
+    let turn = YELLOW;
+    let selected = null;
+    let mustContinueJump = null;
+    let gameOver = false;
+
+    const HEATMAP = [
+        [10,10,10,10,10,10,10,10], [7,9,9,9,9,9,9,7], [5,8,12,12,12,12,8,5],
+        [5,8,12,15,15,12,8,5], [5,8,12,15,15,12,8,5], [5,8,12,12,12,12,8,5],
+        [7,9,9,9,9,9,9,7], [0,0,0,0,0,0,0,0]
+    ];
+
+    function init() {
+        const b = document.getElementById('board');
+        const overlay = document.getElementById('overlay');
+        overlay.style.display = 'none';
+        gameOver = false;
+        turn = YELLOW;
+        selected = null;
+        mustContinueJump = null;
+        document.getElementById('status').innerText = "Your Turn (Yellow)";
+        
+        // Clear board elements except overlay
+        Array.from(b.children).forEach(child => { if(child.id !== 'overlay') b.removeChild(child); });
+
+        board = Array(8).fill().map(() => Array(8).fill(EMPTY));
+        for(let r=0; r<8; r++) {
+            for(let c=0; c<8; c++) {
+                const sq = document.createElement('div');
+                sq.className = `sq ${(r+c)%2==0?'white':'black'}`;
+                sq.onclick = () => handleClick(r, c);
+                b.appendChild(sq);
+                if((r+c)%2 != 0) {
+                    if(r < 3) board[r][c] = RED;
+                    else if(r > 4) board[r][c] = YELLOW;
+                }
+            }
+        }
+        render();
+    }
+
+    function render() {
+        const divs = document.querySelectorAll('.sq');
+        let index = 0;
+        for(let r=0; r<8; r++) {
+            for(let c=0; c<8; c++) {
+                const div = divs[index++];
+                div.innerHTML = '';
+                const val = board[r][c];
+                if(val !== EMPTY) {
+                    const p = document.createElement('div');
+                    p.className = `piece ${val < 0 ? 'red' : 'yellow'} ${Math.abs(val) === 2 ? 'king' : ''}`;
+                    if(selected && selected.r === r && selected.c === c) p.classList.add('selected');
+                    div.appendChild(p);
+                }
+            }
+        }
+        checkGameOver();
+    }
+
+    function checkGameOver() {
+        const moves = getAllValidMoves(board, turn);
+        if(moves.length === 0) {
+            gameOver = true;
+            const winner = turn === YELLOW ? "RED" : "YELLOW";
+            document.getElementById('winText').innerText = winner + " WINS!";
+            document.getElementById('overlay').style.display = 'flex';
+        }
+    }
+
+    // Logic for moves, AI, and rules (Same as optimized version)
+    function onBoard(r,c) { return r>=0 && r<8 && c>=0 && c<8; }
+    
+    function getPieceMoves(state, r, c, isChain = false) {
+        const val = state[r][c];
+        const player = Math.sign(val);
+        const isKing = Math.abs(val) === 2;
+        let moves = [];
+        const dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+        dirs.forEach(([dr, dc]) => {
+            if(!isKing) {
+                if(!isChain) {
+                    const nr = r + (player === YELLOW ? -1 : 1), nc = c + dc;
+                    if(onBoard(nr, nc) && state[nr][nc] === EMPTY) moves.push({from:{r,c}, to:{r:nr, c:nc}});
+                }
+                const cr = r+dr, cc = c+dc, jr = r+dr*2, jc = c+dc*2;
+                if(onBoard(jr, jc) && state[cr][cc] !== EMPTY && Math.sign(state[cr][cc]) !== player && state[jr][jc] === EMPTY) {
+                    moves.push({from:{r,c}, to:{r:jr, c:jc}, cap:{r:cr, c:cc}});
+                }
+            } else {
+                let foundCap = false;
+                for(let dist=1; dist<8; dist++) {
+                    const nr = r+dr*dist, nc = c+dc*dist;
+                    if(!onBoard(nr, nc)) break;
+                    if(state[nr][nc] === EMPTY) {
+                        if(!foundCap && !isChain) moves.push({from:{r,c}, to:{r:nr, c:nc}});
+                        else if(foundCap) moves.push({from:{r,c}, to:{r:nr, c:nc}, cap: foundCap});
+                    } else if(Math.sign(state[nr][nc]) !== player && !foundCap) foundCap = {r:nr, c:nc};
+                    else break;
+                }
+            }
+        });
+        return moves;
+    }
+
+    function getAllValidMoves(state, player) {
+        let all = [];
+        for(let r=0; r<8; r++) for(let c=0; c<8; c++) if(Math.sign(state[r][c]) === player) all.push(...getPieceMoves(state, r, c));
+        const caps = all.filter(m => m.cap);
+        return caps.length > 0 ? filterMax(state, caps) : all;
+    }
+
+    function filterMax(state, caps) {
+        let max = 0;
+        let map = caps.map(m => {
+            const c = simJumps(state, m);
+            if(c > max) max = c;
+            return {m, c};
+        });
+        return map.filter(x => x.c === max).map(x => x.m);
+    }
+
+    function simJumps(state, move) {
+        const ts = state.map(row => [...row]);
+        applyMoveData(ts, move);
+        const next = getPieceMoves(ts, move.to.r, move.to.c, true).filter(m => m.cap);
+        return next.length === 0 ? 1 : 1 + Math.max(...next.map(nj => simJumps(ts, nj)));
+    }
+
+    function applyMoveData(state, move) {
+        let p = state[move.from.r][move.from.c];
+        if(move.to.r === 0 && p === YELLOW) p = Y_KING;
+        if(move.to.r === 7 && p === RED) p = R_KING;
+        state[move.to.r][move.to.c] = p; state[move.from.r][move.from.c] = EMPTY;
+        if(move.cap) state[move.cap.r][move.cap.c] = EMPTY;
+    }
+
+    function handleClick(r, c) {
+        if(gameOver || (turn === RED && document.getElementById('gameMode').value === 'ai')) return;
+        const moves = mustContinueJump || getAllValidMoves(board, turn);
+        if(Math.sign(board[r][c]) === turn) { if(!mustContinueJump) selected = {r, c}; }
+        else if(selected) {
+            const move = moves.find(m => m.from.r === selected.r && m.from.c === selected.c && m.to.r === r && m.to.c === c);
+            if(move) {
+                applyMoveData(board, move);
+                const next = getPieceMoves(board, r, c, true).filter(m => m.cap);
+                if(move.cap && next.length > 0) { mustContinueJump = next; selected = {r, c}; }
+                else {
+                    mustContinueJump = null; selected = null; turn = -turn;
+                    updateTurnStatus();
+                    if(turn === RED && document.getElementById('gameMode').value === 'ai') setTimeout(aiPlay, 600);
+                }
+            }
+        }
+        render();
+    }
+
+    function updateTurnStatus() {
+        const status = document.getElementById('status');
+        if(turn === YELLOW) { status.innerText = "Your Turn (Yellow)"; status.style.color = "#ffff00"; }
+        else { status.innerText = (document.getElementById('gameMode').value === 'ai' ? "AI is thinking..." : "Player 2 (Red)"); status.style.color = "#ff4444"; }
+    }
+
+    function aiPlay() {
+        if(gameOver) return;
+        const res = minimax(board, 6, -Infinity, Infinity, true);
+        if(res.move) {
+            const exec = (m) => {
+                applyMoveData(board, m);
+                const n = getPieceMoves(board, m.to.r, m.to.c, true).filter(i => i.cap);
+                if(m.cap && n.length > 0) exec(filterMax(board, n)[0]);
+            };
+            exec(res.move);
+            turn = YELLOW; updateTurnStatus();
+        }
+        render();
+    }
+
+    function minimax(s, d, a, b, isM) {
+        const moves = getAllValidMoves(s, isM ? RED : YELLOW);
+        if(d === 0 || moves.length === 0) return { score: evalState(s) };
+        let best = null, val = isM ? -Infinity : Infinity;
+        for(const m of moves) {
+            const ns = s.map(row => [...row]); applyMoveData(ns, m);
+            const res = minimax(ns, d-1, a, b, !isM).score;
+            if(isM) { if(res > val) { val = res; best = m; } a = Math.max(a, val); }
+            else { if(res < val) { val = res; best = m; } b = Math.min(b, val); }
+            if(b <= a) break;
+        }
+        return { score: val, move: best };
+    }
+
+    function evalState(s) {
+        let score = 0;
+        for(let r=0; r<8; r++) for(let c=0; c<8; c++) {
+            const v = s[r][c]; if(v === EMPTY) continue;
+            const p = Math.sign(v);
+            let ps = Math.abs(v) === 2 ? 1000 : 200;
+            ps += HEATMAP[p === RED ? r : 7-r][c] * 5;
+            score += (p === RED) ? ps : -ps;
+        }
+        return score;
+    }
+
+    init();
+</script>
+</body>
+</html>
