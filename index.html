@@ -16,7 +16,7 @@
             display: flex; flex-direction: column; border: 2px solid #333; overflow: hidden;
         }
         #chat-messages { flex-grow: 1; padding: 15px; overflow-y: auto; font-size: 0.9rem; display: flex; flex-direction: column; gap: 8px; }
-        .msg { padding: 8px 12px; border-radius: 8px; max-width: 85%; line-height: 1.4; }
+        .msg { padding: 8px 12px; border-radius: 8px; max-width: 85%; line-height: 1.4; word-wrap: break-word; }
         .msg.system { background: #333; color: var(--accent); font-style: italic; align-self: center; font-size: 0.8rem; text-align: center; }
         .msg.player { background: #99990022; color: #ffff00; align-self: flex-start; border: 1px solid #ffff0044; }
         .msg.ai { background: #99000022; color: #ff4444; align-self: flex-end; border: 1px solid #ff444444; }
@@ -25,10 +25,11 @@
         #chat-input { flex-grow: 1; background: #121212; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; outline: none; }
         
         /* Game Styling */
-        .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; }
-        select, button { padding: 10px 15px; border-radius: 5px; border: none; background: #333; color: white; cursor: pointer; font-size: 1rem; transition: 0.3s; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+        input[type="text"], select, button { padding: 10px; border-radius: 5px; border: none; background: #333; color: white; cursor: pointer; font-size: 0.9rem; transition: 0.3s; }
+        input[type="text"] { background: #1a1a1a; border: 1px solid #444; cursor: text; width: 120px; }
         button:hover { background: #444; color: var(--accent); }
-        #status { font-size: 1.5rem; color: #ffcc00; font-weight: bold; margin-bottom: 10px; }
+        #status { font-size: 1.5rem; color: #ffcc00; font-weight: bold; margin-bottom: 10px; height: 30px; }
 
         #board { 
             display: grid; grid-template-columns: repeat(8, 65px); grid-template-rows: repeat(8, 65px); 
@@ -54,7 +55,11 @@
 <body>
 
     <div class="controls">
-        <select id="gameMode">
+        <input type="text" id="p1Name" placeholder="Player 1" onchange="saveNames()">
+        <span style="color:var(--accent)">VS</span>
+        <input type="text" id="p2Name" placeholder="Player 2" onchange="saveNames()">
+        
+        <select id="gameMode" onchange="updateModeUI()">
             <option value="ai">Vs. Gemini AI (Expert)</option>
             <option value="pvp">Two Players (Local)</option>
         </select>
@@ -89,7 +94,42 @@
     let mustContinueJump = null;
     let gameOver = false;
 
-    // Chat Logic
+    // --- PERSISTENCE & NAMES ---
+    function saveNames() {
+        localStorage.setItem('dama_p1', document.getElementById('p1Name').value);
+        localStorage.setItem('dama_p2', document.getElementById('p2Name').value);
+        updateTurnStatus();
+    }
+
+    function loadNames() {
+        document.getElementById('p1Name').value = localStorage.getItem('dama_p1') || "Player 1";
+        const savedP2 = localStorage.getItem('dama_p2');
+        const mode = document.getElementById('gameMode').value;
+        
+        if (mode === 'ai') {
+            document.getElementById('p2Name').value = "Gemini AI";
+        } else {
+            document.getElementById('p2Name').value = savedP2 || "Player 2";
+        }
+    }
+
+    function updateModeUI() {
+        const mode = document.getElementById('gameMode').value;
+        const p2Input = document.getElementById('p2Name');
+        if (mode === 'ai') {
+            p2Input.value = "Gemini AI";
+            p2Input.disabled = true;
+        } else {
+            p2Input.disabled = false;
+            p2Input.value = localStorage.getItem('dama_p2') || "Player 2";
+        }
+        init();
+    }
+
+    function getP1() { return document.getElementById('p1Name').value || "Yellow"; }
+    function getP2() { return document.getElementById('p2Name').value || "Red"; }
+
+    // --- CHAT LOGIC ---
     function addMessage(text, type) {
         const container = document.getElementById('chat-messages');
         const msg = document.createElement('div');
@@ -104,16 +144,16 @@
             const input = document.getElementById('chat-input');
             const val = input.value.trim();
             if (val) {
-                // If AI mode, user is always Yellow. In PVP, use turn logic.
+                const sender = turn === YELLOW ? getP1() : getP2();
                 const type = turn === YELLOW ? 'player' : 'ai';
-                addMessage(val, type);
+                
+                addMessage(`${sender}: ${val}`, type);
                 input.value = '';
                 
-                // If VS AI, let the AI "trash talk" back occasionally
-                if(document.getElementById('gameMode').value === 'ai') {
+                if(document.getElementById('gameMode').value === 'ai' && turn === YELLOW) {
                     setTimeout(() => {
-                        const responses = ["Good move, but I've seen better.", "Are you sure about that?", "Interesting strategy...", "I was programmed for this."];
-                        addMessage(responses[Math.floor(Math.random()*responses.length)], 'ai');
+                        const responses = ["Good move.", "Interesting...", "I was programmed for this.", "Can you beat my logic?"];
+                        addMessage(`${getP2()}: ${responses[Math.floor(Math.random()*responses.length)]}`, 'ai');
                     }, 1000);
                 }
             }
@@ -131,7 +171,7 @@
         const b = document.getElementById('board');
         document.getElementById('overlay').style.display = 'none';
         gameOver = false; turn = YELLOW; selected = null; mustContinueJump = null;
-        document.getElementById('status').innerText = "Your Turn (Yellow)";
+        updateTurnStatus();
         document.getElementById('chat-messages').innerHTML = '<div class="msg system">New Game Started. Good luck!</div>';
         
         Array.from(b.children).forEach(child => { if(child.id !== 'overlay') b.removeChild(child); });
@@ -175,8 +215,8 @@
         const moves = getAllValidMoves(board, turn);
         if(moves.length === 0) {
             gameOver = true;
-            const winner = turn === YELLOW ? "RED" : "YELLOW";
-            document.getElementById('winText').innerText = winner + " WINS!";
+            const winner = turn === YELLOW ? getP2() : getP1();
+            document.getElementById('winText').innerText = winner.toUpperCase() + " WINS!";
             document.getElementById('overlay').style.display = 'flex';
             addMessage(`Game Over! ${winner} is the champion.`, 'system');
         }
@@ -188,14 +228,11 @@
         if(move.to.r === 0 && p === YELLOW) p = Y_KING;
         if(move.to.r === 7 && p === RED) p = R_KING;
         
-        if(p !== oldP) addMessage(`${p > 0 ? 'Yellow' : 'Red'} promoted to Dama!`, 'system');
+        if(p !== oldP) addMessage(`${p > 0 ? getP1() : getP2()} promoted to Dama!`, 'system');
         
         state[move.to.r][move.to.c] = p; state[move.from.r][move.from.c] = EMPTY;
         if(move.cap) state[move.cap.r][move.cap.c] = EMPTY;
     }
-
-    // (Remaining board logic functions: onBoard, getPieceMoves, getAllValidMoves, filterMax, simJumps, handleClick, updateTurnStatus, aiPlay, minimax, evalState)
-    // [I've condensed these for space, but they remain identical to your functional code]
 
     function onBoard(r,c) { return r>=0 && r<8 && c>=0 && c<8; }
     
@@ -277,8 +314,13 @@
 
     function updateTurnStatus() {
         const status = document.getElementById('status');
-        if(turn === YELLOW) { status.innerText = "Your Turn (Yellow)"; status.style.color = "#ffff00"; }
-        else { status.innerText = (document.getElementById('gameMode').value === 'ai' ? "AI is thinking..." : "Player 2 (Red)"); status.style.color = "#ff4444"; }
+        if(turn === YELLOW) { 
+            status.innerText = `${getP1()}'s Turn`; 
+            status.style.color = "#ffff00"; 
+        } else { 
+            status.innerText = (document.getElementById('gameMode').value === 'ai' ? "AI is thinking..." : `${getP2()}'s Turn`); 
+            status.style.color = "#ff4444"; 
+        }
     }
 
     function aiPlay() {
@@ -322,6 +364,8 @@
         return score;
     }
 
+    // Initialize
+    loadNames();
     init();
 </script>
 </body>
